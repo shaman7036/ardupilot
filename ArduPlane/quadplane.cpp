@@ -1025,6 +1025,17 @@ void QuadPlane::hold_stabilize(float throttle_in)
     } else {
         set_desired_spool_state(AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED);
         bool should_boost = true;
+
+        // in sustained forward flight with force-assist, use hover throttle
+        // for copter motors so they always have headroom for attitude control.
+        // the pusher motor handles forward speed via TECS or pilot stick.
+        float copter_throttle = throttle_in;
+        if (assisted_flight &&
+            option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE) &&
+            !in_vtol_mode()) {
+            copter_throttle = motors->get_throttle_hover();
+        }
+
         if (tailsitter.enabled() && assisted_flight) {
             // tailsitters in forward flight should not use angle boost
             should_boost = false;
@@ -1032,7 +1043,7 @@ void QuadPlane::hold_stabilize(float throttle_in)
 #if AP_PLANE_SYSTEMID_ENABLED
         throttle_in += plane.g2.systemid.get_throttle_offset();
 #endif
-        attitude_control->set_throttle_out(throttle_in, should_boost, 0);
+        attitude_control->set_throttle_out(copter_throttle, should_boost, 0);
     }
 }
 
@@ -1452,7 +1463,18 @@ float QuadPlane::desired_auto_yaw_rate_cds(bool body_frame) const
     if (body_frame) {
         return degrees(GRAVITY_MSS * sinf(cd_to_rad(plane.nav_roll_cd))/aspeed) * 100;
     }
-    return degrees(GRAVITY_MSS * tanf(cd_to_rad(plane.nav_roll_cd))/aspeed) * 100;
+
+    float yaw_rate_cds = degrees(GRAVITY_MSS * tanf(cd_to_rad(plane.nav_roll_cd))/aspeed) * 100;
+
+    // for copter motor configurations (FORCE_ENABLED + no control surfaces),
+    // limit yaw rate to prevent motor saturation at low airspeed
+    if (option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE) &&
+        !SRV_Channels::function_assigned(SRV_Channel::k_rudder)) {
+        const float max_yaw_rate_cds = 120.0f * 100.0f;  // 120 deg/s
+        yaw_rate_cds = constrain_float(yaw_rate_cds, -max_yaw_rate_cds, max_yaw_rate_cds);
+    }
+
+    return yaw_rate_cds;
 }
 
 /*
@@ -1612,17 +1634,24 @@ void SLT_Transition::update()
         const float trans_time_ms = constrain_float(quadplane.transition_time_ms, 500, 30000);
         const bool tilt_fwd_complete = !quadplane.tiltrotor.enabled() || quadplane.tiltrotor.tilt_angle_achieved();
         if (transition_timer_ms > unsigned(trans_time_ms) && tilt_fwd_complete) {
-            transition_state = State::DONE;
-            in_forced_transition = false;
-            transition_start_ms = 0;
-            transition_low_airspeed_ms = 0;
+            // when Q_ASSIST_FORCE_ENABLE is set, do not transition to DONE
+            // to keep copter motors active for attitude control in sustained
+            // forward flight
+            if (!quadplane.option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE)) {
+                transition_state = State::DONE;
+                in_forced_transition = false;
+                transition_start_ms = 0;
+                transition_low_airspeed_ms = 0;
+            }
             float throttle;
             if (plane.quadplane.tiltrotor.get_forward_throttle(throttle)) {
                 // Reset the TECS minimum throttle to match throttle of forward thrust motors
                 // and set the throttle channel slew rate limiter to prevent a sudden drop in throttle
-                plane.TECS_controller.set_throttle_min(throttle, true);
-                SRV_Channels::set_slew_last_scaled_output(SRV_Channel::k_throttle, throttle * 100);
-                SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, throttle * 100);
+                if (!quadplane.option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE)) {
+                    plane.TECS_controller.set_throttle_min(throttle, true);
+                    SRV_Channels::set_slew_last_scaled_output(SRV_Channel::k_throttle, throttle * 100);
+                    SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, throttle * 100);
+                }
             }
             gcs().send_text(MAV_SEVERITY_INFO, "Transition done");
         }
@@ -1633,7 +1662,12 @@ void SLT_Transition::update()
         // set zero throttle mix, to give full authority to
         // throttle. This ensures that the fixed wing controllers get
         // a chance to learn the right integrators during the transition
-        quadplane.attitude_control->set_throttle_mix_value(0.5 * transition_scale);
+        if (quadplane.option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE)) {
+            // sustained forward flight: full attitude authority for copter motors
+            quadplane.attitude_control->set_throttle_mix_max(1.0f);
+        } else {
+            quadplane.attitude_control->set_throttle_mix_value(0.5 * transition_scale);
+        }
 
         if (throttle_scaled < 0.01) {
             // ensure we don't drop all the way to zero or the motors
@@ -4312,6 +4346,13 @@ bool QuadPlane::show_vtol_view() const
 // return true if we should show VTOL view
 bool SLT_Transition::show_vtol_view() const
 {
+    // in sustained forward flight with force-assist, the copter motors
+    // handle all attitude control, so show VTOL view for logging, GCS,
+    // and MAVLink attitude messages
+    if (quadplane.option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE) &&
+        quadplane.assisted_flight) {
+        return true;
+    }
 
     return quadplane.in_vtol_mode();
 }
@@ -4353,6 +4394,17 @@ bool QuadPlane::use_fw_attitude_controllers(void) const
               yaw control on some tilt-vectored airframes without
               strong VTOL yaw control
             */
+            return false;
+        }
+
+        // for aircraft without control surfaces, use copter attitude
+        // controller as the sole authority for roll/pitch/yaw
+        if (!SRV_Channels::function_assigned(SRV_Channel::k_aileron) &&
+            !SRV_Channels::function_assigned(SRV_Channel::k_elevator) &&
+            !SRV_Channels::function_assigned(SRV_Channel::k_rudder) &&
+            !SRV_Channels::function_assigned(SRV_Channel::k_elevon_left) &&
+            !SRV_Channels::function_assigned(SRV_Channel::k_elevon_right) &&
+            !SRV_Channels::function_assigned(SRV_Channel::k_vtail_left)) {
             return false;
         }
     }

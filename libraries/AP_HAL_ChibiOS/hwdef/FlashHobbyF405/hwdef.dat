@@ -1,0 +1,224 @@
+# hw definition file for ArduPilot ChibiOS build
+# Board: FlashHobby F405 (FHRCF405)
+# Converted from INAV target FHRCF405 (target.h) provided by user.
+# NOTE: motor/servo (PWM) output pins were NOT present in the INAV
+# target.h snippet supplied — those live in INAV's target.c timer
+# hardware map, which was not included. The MOTOR OUTPUT section
+# below is a PLACEHOLDER and must be filled in from the real
+# schematic / INAV target.c before this hwdef can be used to build
+# a working firmware. Flying with wrong/missing motor pin mapping
+# will not work — ArduPilot will refuse to arm or outputs will be silent.
+
+# -------------------- MCU --------------------
+MCU STM32F4xx STM32F405xx
+
+# 8 MHz crystal (typical for F405 boards; verify against schematic —
+# INAV target.h doesn't specify this, it's usually set via CMake/HSE define)
+OSCILLATOR_HZ 8000000
+
+FLASH_SIZE_KB 1024
+
+# Parameter storage lives in internal MCU flash (separate from the SPI
+# dataflash chip, which is only used for blackbox logging via
+# HAL_LOGGING_DATAFLASH_ENABLED below). Missing this section causes a
+# build error: "HAL_STORAGE_SIZE is not defined, evaluates to 0".
+# Reserve 32k for bootloader (2x16k sectors) + 32k for the storage page,
+# matching the pattern used on MambaF405v2/OmnibusNanoV6/omnibusf4pro
+# (all F405 boards with SPI-flash logging + internal-flash param storage).
+define HAL_STORAGE_SIZE 15360
+STORAGE_FLASH_PAGE 1
+
+# reserve 32k for bootloader and 32k for flash storage
+FLASH_RESERVE_START_KB 64
+
+# Custom/local board — using an arbitrary unused numeric ID since this
+# board isn't registered in Tools/AP_Bootloader/board_types.txt upstream.
+# Fine for local builds; if you ever upstream this board, request a
+# reserved ID via the ArduPilot dev forum first.
+# Skip requiring a prebuilt bootloader binary in Tools/bootloaders/ —
+# newer ArduPilot master checks for this at configure time and calls
+# sys.exit(1) if missing (embeds it in ROMFS for in-flight bootloader
+# updates). We haven't built/flashed a custom bootloader yet, so disable
+# this check for now. Once you have a working hwdef-bl.dat and have run
+# Tools/scripts/build_bootloaders.py FlashHobbyF405 successfully, you can
+# remove this line to re-enable bootloader-flashing-via-firmware support.
+define AP_BOOTLOADER_FLASHING_ENABLED 0
+
+APJ_BOARD_ID 5301
+
+# -------------------- LED --------------------
+PC14 LED0 OUTPUT LOW GPIO(0)
+define HAL_GPIO_A_LED_PIN 0
+define HAL_LED_ON 0
+
+# -------------------- Beeper --------------------
+# BEEPER_INVERTED in INAV -> active low logic on ArduPilot side
+PB2 BUZZER OUTPUT GPIO(1) HIGH
+define HAL_BUZZER_PIN 1
+define HAL_BUZZER_ON 0
+define HAL_BUZZER_OFF 1
+
+# -------------------- PINIO (user-controllable output, e.g. VTX power switch) --------------------
+PC13 PINIO1 OUTPUT HIGH GPIO(2)
+
+# -------------------- SPI1 : IMU (MPU6000 / BMI270 / ICM42605, shared CS) --------------------
+PA4 IMU_CS CS
+PA5 SPI1_SCK SPI1
+PA6 SPI1_MISO SPI1
+PA7 SPI1_MOSI SPI1
+
+SPIDEV mpu6000   SPI1 DEVID1 IMU_CS MODE3 1*MHZ  8*MHZ
+SPIDEV icm42605  SPI1 DEVID2 IMU_CS MODE3 1*MHZ  8*MHZ
+SPIDEV bmi270    SPI1 DEVID3 IMU_CS MODE3 1*MHZ  8*MHZ
+
+# All three IMU variants share one footprint/CS pin (populate option depends
+# on assembly batch) — declare all three, ArduPilot probes at boot and uses
+# whichever responds. Update ROTATION_ if the FC is mounted rotated on your frame.
+IMU Invensense      SPI:mpu6000   ROTATION_NONE
+IMU Invensensev3   SPI:icm42605  ROTATION_NONE
+IMU BMI270         SPI:bmi270    ROTATION_NONE
+
+# -------------------- I2C1 : Baro / Mag / Rangefinder --------------------
+I2C_ORDER I2C1
+PB8 I2C1_SCL I2C1
+PB9 I2C1_SDA I2C1
+
+# Baro: probe generic I2C baro types (matches INAV's USE_BARO_ALL)
+BARO DPS310 I2C:0:0x76
+BARO BMP280 I2C:0:0x76
+define AP_BARO_BACKEND_DEFAULT_ENABLED 0
+define AP_BARO_DPS280_ENABLED 1
+define AP_BARO_BMP280_ENABLED 1
+define HAL_BARO_ALLOW_INIT_NO_BARO 1
+
+# No fixed onboard compass (matches INAV's USE_MAG_ALL generic probe) —
+# don't hard-declare COMPASS lines (they need external/ROTATION args and
+# a specific chip; we don't know which one is populated). Instead just
+# probe the I2C bus for any supported external compass at boot, same
+# pattern as MatekF405 / SpeedyBeeF405Mini / MambaF405v2.
+define ALLOW_ARM_NO_COMPASS
+define AP_COMPASS_PROBING_ENABLED 1
+define HAL_I2C_INTERNAL_MASK 0
+define HAL_COMPASS_AUTO_ROT_DEFAULT 2
+
+# -------------------- SPI2 : OSD (MAX7456) --------------------
+PB12 OSD_CS CS
+PB13 SPI2_SCK SPI2
+PB14 SPI2_MISO SPI2
+PB15 SPI2_MOSI SPI2
+
+SPIDEV osd SPI2 DEVID4 OSD_CS MODE0 10*MHZ 10*MHZ
+
+# -------------------- SPI3 : dataflash (M25P16, blackbox logging) --------------------
+PA15 FLASH_CS CS
+PC10 SPI3_SCK SPI3
+PC11 SPI3_MISO SPI3
+PC12 SPI3_MOSI SPI3
+
+SPIDEV dataflash SPI3 DEVID5 FLASH_CS MODE3 32*MHZ 32*MHZ
+
+define HAL_LOGGING_DATAFLASH_ENABLED 1
+
+# -------------------- USB (VCP, always SERIAL0) --------------------
+# This was missing entirely — SERIAL_ORDER referenced OTG1 but without
+# these pin declarations the USB CDC driver (SDU1) never gets configured,
+# causing "'SDU1' was not declared in this scope" at compile time.
+PA11 OTG_FS_DM OTG1
+PA12 OTG_FS_DP OTG1
+
+# -------------------- UARTs --------------------
+# SERIALRX_UART in INAV = USART2 -> keep RC receiver on SERIAL1 (USART2)
+# USB (VCP) is always SERIAL0
+SERIAL_ORDER OTG1 USART2 USART1 USART3 UART4 UART5 USART6
+
+PA9  USART1_TX USART1
+PA10 USART1_RX USART1
+
+PA2  USART2_TX USART2
+PA3  USART2_RX USART2
+
+PB10 USART3_TX USART3
+PB11 USART3_RX USART3
+
+PA0  UART4_TX UART4
+PA1  UART4_RX UART4
+
+# UART5 RX only on this board (no TX pin defined in INAV target)
+PD2  UART5_RX UART5
+
+PC6  USART6_TX USART6
+PC7  USART6_RX USART6
+
+# Default RC protocol on SERIAL1 (USART2), matches INAV SERIALRX_SBUS
+define DEFAULT_SERIAL1_PROTOCOL SerialProtocol_RCIN
+
+# -------------------- ADC : Battery voltage / current --------------------
+PC2 BATT_VOLTAGE_SENS ADC1 SCALE(1)
+PC1 BATT_CURRENT_SENS ADC1 SCALE(1)
+
+# NOTE: pin numbers (HAL_BATT_VOLT_PIN / HAL_BATT_CURR_PIN) are auto-derived
+# by chibios_hwdef.py from the BATT_VOLTAGE_SENS/BATT_CURRENT_SENS pin
+# declarations above — do NOT hardcode them manually, they're specific to
+# each board's ADC channel wiring and copying from another board's hwdef
+# will give wrong readings even though it compiles fine.
+# these scale values are NOT in the INAV target.h (INAV computes them from
+# its own resource config) — verify against schematic or measure/calibrate
+# via BATT_VOLT_MULT / BATT_AMP_PERVLT params after first boot
+define HAL_BATT_VOLT_SCALE 11.0
+define HAL_BATT_CURR_SCALE 40.0
+
+# -------------------- PA8 repurposed as 9th motor output (was LED strip in INAV) --------------------
+# TIM1_CH1 no longer drives WS2812 — reassigned as a normal PWM/DShot motor
+# output for 5+ motor frames (hexa/octo/Y6 etc). No onboard addressable LED
+# strip support on this pin anymore as a trade-off.
+PA8 TIM1_CH1 TIM1 PWM(9) GPIO(60)   # M9 (5th physical motor)
+
+# ================== MOTOR / SERVO OUTPUTS ==================
+# Taken from INAV target.c timerHardware[] — silk labels S1..S8 preserved
+# as PWM output numbering so it matches what's printed on the board.
+# All on TIM3/TIM4/TIM8. TIM1_CH1/PA8 is defined separately above as the
+# 9th (5th physical) motor output — no LED strip on this board anymore.
+#
+# BIDIR (bidirectional DShot / RPM telemetry) removed for now: with 9
+# PWM outputs + IMU/OSD/dataflash SPI + ADC all competing for the F405's
+# 16 DMA streams, enabling BIDIR on every motor starved ADC1 of a stream
+# entirely (build error: "Missing required DMA for ADC1"). Plain DShot
+# still works fine without BIDIR — it just doesn't need a return DMA
+# channel for RPM telemetry. Get a working build first, then try adding
+# BIDIR back on 2-4 outputs at a time (e.g. just S1-S4) and see if it
+# still configures; if not, drop back down until it does.
+
+PB0 TIM3_CH3 TIM3 PWM(1) GPIO(50)   # S1
+PB1 TIM3_CH4 TIM3 PWM(2) GPIO(51)   # S2
+PB5 TIM3_CH2 TIM3 PWM(3) GPIO(52)   # S3
+PB4 TIM3_CH1 TIM3 PWM(4) GPIO(53)   # S4
+PB6 TIM4_CH1 TIM4 PWM(5) GPIO(54)   # S5
+PB7 TIM4_CH2 TIM4 PWM(6) GPIO(55)   # S6
+PC8 TIM8_CH3 TIM8 PWM(7) GPIO(56)   # S7
+PC9 TIM8_CH4 TIM8 PWM(8) GPIO(57)   # S8
+
+define HAL_PWM_COUNT 9
+
+# Output numbering summary after PA8 reassignment:
+#   PWM 1-4 = S1-S4  -> motors 1-4 (quad core)
+#   PWM 9   = PA8     -> motor 5 (was LED strip pin)
+#   PWM 5-8 = S5-S8  -> still free for motors 6-8, or servos/gimbal/etc.
+# In ArduPilot, set FRAME_CLASS/FRAME_TYPE params (not hwdef) to match your
+# actual motor count/layout (e.g. FRAME_CLASS=3 Hexa if you wire up to 6).
+# ArduPilot's standard hexa/octo motor order expects consecutive output
+# numbers 1..N for N motors — if you go beyond 5 motors, prefer using
+# S5 (PWM 5) as motor 5 instead of PA8/PWM(9), so outputs stay contiguous
+# 1-6/1-8. Using PA8 as motor 5 works but breaks the "1..N contiguous"
+# convention — you may need to remap via SERVOx_FUNCTION params in
+# Mission Planner instead of relying on frame-class auto-assignment.
+
+# DMA priority: guarantee ADC1 always gets a stream, even if new
+# peripherals get added to this file later. Doesn't hurt now that BIDIR
+# is off, but makes future changes safer.
+DMA_NOSHARE ADC1
+
+# disable parachute to save flash
+define HAL_PARACHUTE_ENABLED 0
+
+# save some flash
+include ../include/minimize_fpv_osd.inc
