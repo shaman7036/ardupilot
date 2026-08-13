@@ -572,6 +572,15 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @Bitmask: 1: Disable thrust loss detection in transtions and fixed wing modes. Thrust loss detection will only run in VTOL modes.
     AP_GROUPINFO("THRST_LOSS_OPT", 42, QuadPlane, thrust_loss.options, 0),
 
+    // @Param: ASSIST_YAW_RATE_MAX
+    // @DisplayName: QuadPlane force-assist max yaw rate
+    // @Description: Maximum yaw rate in deg/s during force-assisted forward flight without control surfaces. Limits yaw to prevent motor saturation at low airspeed. Only active when Q_OPTIONS bit 7 (Q_ASSIST_FORCE_ENABLE) is set and no rudder servo is assigned.
+    // @Range: 30 360
+    // @Units: deg/s
+    // @Increment: 5
+    // @User: Advanced
+    AP_GROUPINFO("ASSIST_YAW_RATE_MAX", 43, QuadPlane, q_assist_yaw_rate_max, 120.0),
+
     AP_GROUPEND
 };
 
@@ -1470,7 +1479,7 @@ float QuadPlane::desired_auto_yaw_rate_cds(bool body_frame) const
     // limit yaw rate to prevent motor saturation at low airspeed
     if (option_is_set(QuadPlane::Option::Q_ASSIST_FORCE_ENABLE) &&
         !SRV_Channels::function_assigned(SRV_Channel::k_rudder)) {
-        const float max_yaw_rate_cds = 120.0f * 100.0f;  // 120 deg/s
+        const float max_yaw_rate_cds = q_assist_yaw_rate_max * 100.0f;
         yaw_rate_cds = constrain_float(yaw_rate_cds, -max_yaw_rate_cds, max_yaw_rate_cds);
     }
 
@@ -1503,6 +1512,7 @@ void SLT_Transition::update()
             const bool show_message = transition_state != State::AIRSPEED_WAIT || transition_start_ms == 0;
             if (show_message) {
                 gcs().send_text(MAV_SEVERITY_INFO, "Transition started airspeed %.1f", (double)aspeed);
+                transition_done_msg_sent = false;
             }
             transition_state = State::AIRSPEED_WAIT;
             if (transition_start_ms == 0) {
@@ -1564,6 +1574,7 @@ void SLT_Transition::update()
             if (quadplane.option_is_set(QuadPlane::Option::TRANS_FAIL_TO_FW) && tiltrotor_with_ground_speed) {
                 transition_state = State::TIMER;
                 in_forced_transition = true;
+                transition_done_msg_sent = false;
             } else {
                 switch (QuadPlane::TRANS_FAIL::ACTION(quadplane.transition_failure.action)) {
                     case QuadPlane::TRANS_FAIL::ACTION::QLAND:
@@ -1586,6 +1597,7 @@ void SLT_Transition::update()
         transition_low_airspeed_ms = now;
         if (have_airspeed && aspeed > plane.aparm.airspeed_min && !quadplane.assisted_flight) {
             transition_state = State::TIMER;
+            transition_done_msg_sent = false;
             airspeed_reached_tilt = quadplane.tiltrotor.current_tilt;
             gcs().send_text(MAV_SEVERITY_INFO, "Transition airspeed reached %.1f", (double)aspeed);
         }
@@ -1653,7 +1665,10 @@ void SLT_Transition::update()
                     SRV_Channels::set_output_scaled(SRV_Channel::k_throttle, throttle * 100);
                 }
             }
-            gcs().send_text(MAV_SEVERITY_INFO, "Transition done");
+            if (!transition_done_msg_sent) {
+                gcs().send_text(MAV_SEVERITY_INFO, "Transition done");
+                transition_done_msg_sent = true;
+            }
         }
 
         float transition_scale = (trans_time_ms - transition_timer_ms) / trans_time_ms;
@@ -4698,6 +4713,7 @@ void SLT_Transition::force_transition_complete()
     in_forced_transition = false;
     transition_start_ms = 0;
     transition_low_airspeed_ms = 0;
+    transition_done_msg_sent = false;
     set_last_fw_pitch();
 
     // Keep assistance reset while not checking

@@ -86,7 +86,7 @@ public:
 
     bool complete() const override { return transition_state == State::DONE; }
 
-    void restart() override { transition_state = State::AIRSPEED_WAIT; }
+    void restart() override { transition_state = State::AIRSPEED_WAIT; transition_done_msg_sent = false; }
 
     uint8_t get_log_transition_state() const override { return static_cast<uint8_t>(transition_state); }
 
@@ -129,6 +129,9 @@ protected:
     float airspeed_reached_tilt;
 
     bool in_forced_transition;
+
+    // flag to send "Transition done" GCS message only once
+    bool transition_done_msg_sent;
 
 };
 

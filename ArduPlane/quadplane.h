@@ -393,6 +393,9 @@ private:
     // limit applied to back pitch to prevent wing producing excessive lift
     AP_Float q_bck_pitch_lim;
 
+    // max yaw rate during force-assisted forward flight without control surfaces
+    AP_Float q_assist_yaw_rate_max;
+
     // which fwd throttle handling method is active
     enum class ActiveFwdThr : uint8_t {
         NONE = 0,
