@@ -572,14 +572,14 @@ const AP_Param::GroupInfo QuadPlane::var_info2[] = {
     // @Bitmask: 1: Disable thrust loss detection in transtions and fixed wing modes. Thrust loss detection will only run in VTOL modes.
     AP_GROUPINFO("THRST_LOSS_OPT", 42, QuadPlane, thrust_loss.options, 0),
 
-    // @Param: ASSIST_YAW_RATE_MAX
+    // @Param: YAW_RATE_MAX
     // @DisplayName: QuadPlane force-assist max yaw rate
     // @Description: Maximum yaw rate in deg/s during force-assisted forward flight without control surfaces. Limits yaw to prevent motor saturation at low airspeed. Only active when Q_OPTIONS bit 7 (Q_ASSIST_FORCE_ENABLE) is set and no rudder servo is assigned.
     // @Range: 30 360
     // @Units: deg/s
     // @Increment: 5
     // @User: Advanced
-    AP_GROUPINFO("ASSIST_YAW_RATE_MAX", 43, QuadPlane, q_assist_yaw_rate_max, 120.0),
+    AP_GROUPINFO("YAW_RATE_MAX", 43, QuadPlane, q_assist_yaw_rate_max, 120.0),
 
     AP_GROUPEND
 };
